@@ -56,7 +56,7 @@ tailwind.config = { theme: { extend: {
       </form><p class="text-xs text-slate-400 text-center mt-4">กรุณาเข้าสู่ระบบด้วยบัญชีที่ผู้ดูแลกำหนด</p>
     </div>
   </div>
-  <div class="no-print flex justify-end items-center gap-3 mb-2 text-sm"><span class="text-slate-600" x-text="authUser ? authUser.username + ' · ' + roleLabel(authUser.role) : ''"></span><button x-show="authUser" class="text-red-600 underline" @click="logout()">ออกจากระบบ</button></div>
+  <div class="no-print flex justify-end items-center gap-3 mb-2 text-sm"><span class="text-xs" :class="syncState === 'err' ? 'text-red-600' : (syncState === 'on' ? 'text-green-700' : 'text-slate-500')" x-text="'☁ ' + syncMsg"></span><span x-show="liveMsg" class="text-xs font-semibold text-orange-700 bg-orange-100 rounded px-2 py-0.5" x-text="liveMsg"></span><button x-show="dbRef" class="text-xs text-navy-700 underline" @click="scheduleSync(0)">ซิงค์ตอนนี้</button><span class="text-slate-600" x-text="authUser ? authUser.username + ' · ' + roleLabel(authUser.role) : ''"></span><button x-show="authUser" class="text-red-600 underline" @click="logout()">ออกจากระบบ</button></div>
 
   <nav class="no-print flex gap-1 mb-3 border-b border-slate-300" role="tablist">
     <template x-for="t in tabs.filter(t => allowedTabs.includes(t.id))" :key="t.id">
@@ -785,6 +785,7 @@ function dispatchApp() {
   return {
     doc: blankDoc(),
     savedMsg: '',
+    dbRef: null, syncState: 'off', syncMsg: 'โหมดในเครื่อง', syncMeta: {}, syncTimer: null, syncBusy: false, syncAgain: false, liveMsg: '', liveReady: false, liveTimer: null,
     pasteText: '', importMsg: '', importOk: true,
     dlg: { open: false, msg: '', fn: null },
     tab: 'dispatch', jobId: null, selVehicle: null, justSaved: null, savedErr: false,
@@ -816,11 +817,121 @@ function dispatchApp() {
       } catch (e) { /* ใช้ข้อมูลเริ่มต้น */ }
       this.ensureMaster(); this.normalizeCrew(this.doc);
       if (!this.doc.docNo) { this.doc.docNoAuto = true; this.doc.docNo = this.nextDocNo(this.doc.date); }
-      this.$watch('doc', () => { this.save(false); });
-      this.$watch('master', v => { this.put(MKEY, v); });
-      this.$watch('history', v => { this.put(HKEY, v); });
+      this.$watch('doc', () => { this.save(false); this.scheduleSync(); });
+      this.$watch('master', v => { this.put(MKEY, v); this.scheduleSync(); });
+      this.$watch('history', v => { this.put(HKEY, v); this.scheduleSync(); });
       this.authSession = localStorage.getItem('vschem-auth-session') || '';
       this.restoreAuth();
+      this.initSync();
+    },
+    // ---- ซิงค์กับฐานข้อมูล (ทำงานในเครื่องก่อน แล้วซิงค์เมื่อออนไลน์) ----
+    async hashPw(pw, saltHex) {
+      const enc = new TextEncoder(), salt = Uint8Array.from(saltHex.match(/../g).map(h => parseInt(h, 16)));
+      const key = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveBits']);
+      const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, key, 256);
+      return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+    },
+    async setPw(u, pw) {
+      const salt = Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join('');
+      u.salt = salt; u.hash = await this.hashPw(pw, salt); delete u.password;
+    },
+    acctKey(name) { return 'accounts/u' + Array.from(new TextEncoder().encode(name)).map(b => b.toString(16).padStart(2, '0')).join(''); },
+    sigOf(o) { return stable(JSON.parse(JSON.stringify(o))); },
+    async initSync() {
+      try { const us = this.localUsers(); let ch = false; for (const u of us) if (!u.hash && u.password) { await this.setPw(u, u.password); ch = true; } if (ch) this.saveUsers(us); } catch (e) {}
+      try { this.dbRef = (window.claude && await window.claude.use('db')) || null; } catch (e) { this.dbRef = null; }
+      if (!this.dbRef) { this.syncState = 'off'; this.syncMsg = 'โหมดในเครื่อง (ไม่ได้เชื่อมฐานข้อมูล)'; return; }
+      this.syncState = 'on'; this.syncMsg = 'กำลังเชื่อมฐานข้อมูล...';
+      ['jobs', 'master', 'accounts'].forEach(col => this.dbRef.collection(col).onSnapshot(snap => this.pull(col, snap), e => this.syncFail(e)));
+      setInterval(() => this.scheduleSync(0), 15000);
+      setTimeout(() => { this.liveReady = true; }, 3000);
+      this.scheduleSync(300);
+    },
+    syncFail(e) { this.syncState = 'err'; this.syncMsg = 'ซิงค์ไม่สำเร็จ: ' + ((e && (e.message || e.code)) || 'ไม่ทราบสาเหตุ') + ' (ข้อมูลยังเก็บในเครื่อง)'; },
+    syncOk() { this.syncState = 'on'; this.syncMsg = 'เรียลไทม์ · อัปเดตล่าสุด ' + new Date().toLocaleTimeString('th-TH'); },
+    scheduleSync(ms) {
+      if (!this.dbRef) return;
+      clearTimeout(this.syncTimer);
+      this.syncTimer = setTimeout(() => this.pushAll(), ms === undefined ? 500 : ms);
+    },
+    localJob(id) { return id === this.doc.id ? this.doc : this.history.find(h => h.id === id); },
+    localItems() {
+      const jobs = new Map();
+      this.history.forEach(h => jobs.set(h.id, h));
+      if (this.hasData(this.doc)) jobs.set(this.doc.id, this.doc);
+      const out = [...jobs.values()].map(d => ({ key: 'jobs/' + d.id, obj: d }));
+      if (this.authUser && this.authUser.role === 'admin') {          // ข้อมูลหลักและบัญชี แก้/ส่งได้เฉพาะ Admin
+        out.push({ key: 'master/main', obj: this.master });
+        this.localUsers().forEach(u => { if (u.hash) out.push({ key: this.acctKey(u.username), obj: u }); });
+      }
+      return out;
+    },
+    async pushAll() {
+      if (!this.dbRef) return;
+      if (this.syncBusy) { this.syncAgain = true; return; }
+      this.syncBusy = true;
+      try {
+        for (const it of this.localItems()) {
+          const s = this.sigOf(it.obj), m = this.syncMeta[it.key];
+          if (m && m.sig === s) continue;
+          const t = Date.now();
+          await this.dbRef.doc(it.key).set({ t, json: s });
+          this.syncMeta[it.key] = { t, sig: s };
+        }
+        this.syncOk();
+      } catch (e) { this.syncFail(e); }
+      finally { this.syncBusy = false; if (this.syncAgain) { this.syncAgain = false; this.scheduleSync(500); } }
+    },
+    async syncDelete(key) {
+      delete this.syncMeta[key];
+      if (!this.dbRef) return;
+      try { await this.dbRef.doc(key).delete(); } catch (e) { this.syncFail(e); }
+    },
+    pull(col, snap) {
+      try {
+        snap.docChanges().forEach(ch => {
+          const id = ch.doc.id, key = col + '/' + id;
+          if (ch.type === 'removed') {
+            if (col === 'jobs' && id !== this.doc.id && this.syncMeta[key]) { this.history = this.history.filter(h => h.id !== id); }
+            delete this.syncMeta[key]; return;
+          }
+          const r = ch.doc.data() || {}, m = this.syncMeta[key];
+          if (!r.json || (m && Number(r.t) <= m.t)) return;
+          let obj; try { obj = JSON.parse(r.json); } catch (e) { return; }
+          if (col === 'jobs') this.applyJob(key, id, r, obj);
+          else if (col === 'master') this.applyMaster(key, r, obj);
+          else this.applyAccount(key, r, obj);
+        });
+        this.syncOk();
+      } catch (e) { this.syncFail(e); }
+    },
+    applyJob(key, id, r, obj) {
+      const local = this.localJob(id), m = this.syncMeta[key];
+      if (local && m && this.sigOf(local) !== m.sig) return;            // มีการแก้ในเครื่องที่ยังไม่ส่ง ให้ฉบับในเครื่องชนะ
+      if (local && !m && this.sigOf(local) === r.json) { this.syncMeta[key] = { t: Number(r.t), sig: r.json }; return; }
+      const nd = Object.assign(blankDoc(), obj); this.normalizeCrew(nd);
+      if (id === this.doc.id) { this.doc = nd; }
+      else { const i = this.history.findIndex(h => h.id === id); if (i >= 0) this.history.splice(i, 1, nd); else this.history.push(nd); }
+      this.syncMeta[key] = { t: Number(r.t), sig: this.sigOf(this.localJob(id)) };
+      if (this.liveReady) { this.liveMsg = 'อัปเดตสดจากเครื่องอื่น: ใบงาน ' + (nd.docNo || '-') + (nd.vehicle ? ' (' + nd.vehicle + ')' : ''); clearTimeout(this.liveTimer); this.liveTimer = setTimeout(() => { this.liveMsg = ''; }, 5000); }
+    },
+    applyMaster(key, r, obj) {
+      const m = this.syncMeta[key];
+      if (m && this.sigOf(this.master) !== m.sig) return;
+      if (!(Array.isArray(obj.employees) && Array.isArray(obj.vehicles))) return;
+      const rc = obj.docCounters || {}, lc = this.master.docCounters || {};
+      Object.keys(lc).forEach(k => { rc[k] = Math.max(Number(rc[k]) || 0, Number(lc[k]) || 0); });
+      obj.docCounters = rc; this.master = obj; this.ensureMaster();
+      this.syncMeta[key] = { t: Number(r.t), sig: this.sigOf(this.master) };
+    },
+    applyAccount(key, r, obj) {
+      if (!obj || !obj.username || !obj.hash) return;
+      const us = this.localUsers(), i = us.findIndex(x => x.username === obj.username), m = this.syncMeta[key];
+      if (i >= 0 && m && this.sigOf(us[i]) !== m.sig) return;
+      if (i >= 0) us.splice(i, 1, obj); else us.push(obj);
+      localStorage.setItem('vschem-local-users', JSON.stringify(us));
+      this.syncMeta[key] = { t: Number(r.t), sig: this.sigOf(obj) };
+      if (this.authUser && this.authUser.role === 'admin') this.users = us;
     },
     async restoreAuth() {
       if (!this.authSession) return;
@@ -828,13 +939,21 @@ function dispatchApp() {
       this.authSession = ''; this.authUser = null; localStorage.removeItem('vschem-auth-session');
     },
     localUsers() { try { return JSON.parse(localStorage.getItem('vschem-local-users') || '[]'); } catch (e) { return []; } },
-    saveUsers(u) { localStorage.setItem('vschem-local-users', JSON.stringify(u)); },
+    saveUsers(u) { localStorage.setItem('vschem-local-users', JSON.stringify(u)); this.scheduleSync(); },
     async login() {
       if (this.authBusy) return; this.authBusy = true; this.authMsg = '';
       try {
         const uname = this.loginForm.username.trim(), pwd = this.loginForm.password; let u = null;
         if (uname === 'admin' && pwd === '1234' && !this.localUsers().some(x => x.username === 'admin')) u = { username: 'admin', role: 'admin' };
-        else { const f = this.localUsers().find(x => x.username === uname && x.password === pwd && x.active !== false); if (f) u = { username: f.username, role: f.role }; }
+        else {
+          const us = this.localUsers(), f = us.find(x => x.username === uname && x.active !== false);
+          if (f) {
+            let ok = false;
+            if (f.hash) ok = (await this.hashPw(pwd, f.salt)) === f.hash;
+            else if (f.password && f.password === pwd) { ok = true; await this.setPw(f, pwd); this.saveUsers(us); }   // บัญชีเก่า: แปลงเป็นแบบเข้ารหัส
+            if (ok) u = { username: f.username, role: f.role };
+          }
+        }
         if (!u) throw new Error('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
         this.authSession = 'sess_' + Date.now(); this.authUser = u; this.tab = this.allowedTabs[0] || 'dispatch'; this.selVehicle = null; this.jobId = null;
         localStorage.setItem('vschem-auth-session', this.authSession);
@@ -852,7 +971,7 @@ function dispatchApp() {
         if (n.username.length < 3) throw new Error('ชื่อผู้ใช้อย่างน้อย 3 ตัว');
         if (n.password.length < 8) throw new Error('รหัสผ่านอย่างน้อย 8 ตัว');
         if (n.username === 'admin' || us.some(x => x.username === n.username)) throw new Error('มีชื่อผู้ใช้นี้อยู่แล้ว');
-        us.push({ username: n.username, password: n.password, role: n.role, active: true }); this.saveUsers(us);
+        const nu = { username: n.username, role: n.role, active: true }; await this.setPw(nu, n.password); us.push(nu); this.saveUsers(us);
         this.newAccount = { username: '', password: '', role: 'user' }; this.userMsgOk = true; this.userMsg = 'สร้างบัญชีผู้ใช้แล้ว'; await this.loadUsers();
       } catch (e) { this.userMsgOk = false; this.userMsg = e.message; } finally { this.userBusy = false; }
     },
@@ -865,7 +984,7 @@ function dispatchApp() {
       const p = prompt('กำหนดรหัสผ่านใหม่ (อย่างน้อย 8 ตัวอักษร) สำหรับ ' + u.username);
       if (p === null) return;
       if (p.length < 8) { this.userMsgOk = false; this.userMsg = 'รหัสผ่านอย่างน้อย 8 ตัว'; return; }
-      const us = this.localUsers(), f = us.find(x => x.username === u.username); if (f) f.password = p;
+      const us = this.localUsers(), f = us.find(x => x.username === u.username); if (f) await this.setPw(f, p);
       this.saveUsers(us); this.userMsgOk = true; this.userMsg = 'ตั้งรหัสผ่านใหม่แล้ว';
     },
     save(manual) {
@@ -1007,7 +1126,7 @@ function dispatchApp() {
     },
     removeHistory(d) {
       this.ask('ลบใบงานเลขที่ ' + (d.docNo || '-') + ' ออกจากประวัติ?', () => {
-        this.history = this.history.filter(h => h.id !== d.id);
+        this.history = this.history.filter(h => h.id !== d.id); this.syncDelete('jobs/' + d.id);
       });
     },
     get allDocs() {
