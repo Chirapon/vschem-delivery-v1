@@ -73,9 +73,10 @@ tailwind.config = { theme: { extend: {
         @click="tab = t.id; selVehicle = null; jobId = null" x-text="t.label"></button>
     </template>
   </nav>
+  <div x-show="authUser && !allowedTabs.length" class="no-print rounded-md border border-amber-400 bg-amber-50 p-4 text-sm text-amber-900">บัญชีนี้ยังไม่มีเมนูที่เข้าถึงได้ อาจกำลังโหลดข้อมูลสิทธิ์จากฐานข้อมูล รอสักครู่ ถ้ายังไม่ขึ้นให้แจ้งผู้ดูแลระบบ</div>
 
   <!-- Toolbar -->
-  <div x-show="tab === 'dispatch'" class="no-print flex flex-wrap items-center justify-between gap-2 mb-3">
+  <div x-show="inTab('dispatch')" class="no-print flex flex-wrap items-center justify-between gap-2 mb-3">
     <p class="text-sm" :class="savedErr ? 'text-red-600 font-semibold' : 'text-slate-600'" x-text="savedMsg"></p>
     <div class="flex flex-wrap gap-2">
       <button class="btn bg-navy-700 text-white hover:bg-navy-800" @click="saveDoc()">บันทึกใบงาน</button>
@@ -84,7 +85,7 @@ tailwind.config = { theme: { extend: {
     </div>
   </div>
 
-  <main x-show="tab === 'dispatch'" class="sheet bg-white rounded-lg shadow border border-slate-200">
+  <main x-show="inTab('dispatch')" class="sheet bg-white rounded-lg shadow border border-slate-200">
 
     <!-- Header -->
     <header :class="stat(doc).head" class="text-white rounded-t-lg px-4 sm:px-6 py-4 flex items-start justify-between gap-4">
@@ -105,7 +106,7 @@ tailwind.config = { theme: { extend: {
       <div><label class="lbl">ทะเบียนรถ (ใช้จัดกลุ่มใบงาน)</label>
         <select class="field font-semibold" x-model="doc.vehicle" :style="'border:2px solid ' + vc(doc.vehicle).bg + ';background:' + vc(doc.vehicle).tint">
           <option value="">เลือกทะเบียน</option>
-          <template x-for="v in vehiclesList" :key="v.id"><option :value="v.plate" x-text="v.plate + (v.type === 'rental' ? ' [รถเช่า]' : '') + (v.note ? ' (' + v.note + ')' : '')"></option></template>
+          <template x-for="v in vehiclesList" :key="v.id"><option :value="v.plate" x-text="v.plate + (v.type && v.type !== 'own' ? ' [' + groupName(v.type) + ']' : '') + (v.note ? ' (' + v.note + ')' : '')"></option></template>
           <template x-if="doc.vehicle && !vehiclesList.some(v => v.plate === doc.vehicle)"><option :value="doc.vehicle" x-text="doc.vehicle"></option></template>
         </select></div>
       <div><label class="lbl">พนักงานขับรถ</label>
@@ -298,7 +299,7 @@ tailwind.config = { theme: { extend: {
   </main>
 
   <!-- Vehicles -->
-  <section x-show="tab === 'drivers' || tab === 'rentals'" class="no-print space-y-4">
+  <section x-show="curFleet !== null && allowedTabs.includes(tab)" class="no-print space-y-4">
     <div x-show="justSaved && fleetOf(justSaved.vehicle) === curFleet" class="rounded-md border border-green-300 bg-green-50 p-4">
       <p class="font-semibold text-green-800" x-text="'บันทึกใบงานเลขที่ ' + (justSaved ? (justSaved.docNo || '-') : '') + ' เรียบร้อยแล้ว'"></p>
       <p class="text-sm text-green-900">แตะที่ทะเบียนรถของคุณเพื่อดูงานของรถคันนั้น
@@ -308,7 +309,7 @@ tailwind.config = { theme: { extend: {
     </div>
 
     <div x-show="selVehicle === null && jobId === null">
-      <h2 class="text-xl font-bold text-navy-800 mb-3" x-text="tab === 'rentals' ? 'รถเช่า' : 'รถ / ทะเบียน'"></h2>
+      <h2 class="text-xl font-bold text-navy-800 mb-3" x-text="tabLabel(tab)"></h2>
       <p x-show="!vehicleCards.length" class="bg-white border border-dashed border-slate-300 rounded-md p-6 text-center text-sm text-slate-500">ยังไม่มีทะเบียนรถ เพิ่มได้ที่แท็บ Admin</p>
       <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <template x-for="c in vehicleCards" :key="c.key">
@@ -470,7 +471,7 @@ tailwind.config = { theme: { extend: {
   </section>
 
   <!-- Dashboard -->
-  <section x-show="tab === 'dashboard'" class="no-print space-y-4">
+  <section x-show="inTab('dashboard')" class="no-print space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="text-xl font-bold text-navy-800">Dashboard</h2>
       <select class="field w-auto" x-model="range" aria-label="ช่วงเวลา">
@@ -567,7 +568,7 @@ tailwind.config = { theme: { extend: {
       <form class="grid sm:grid-cols-4 gap-2 items-end" @submit.prevent="createAccount()">
         <div><label class="lbl">ชื่อผู้ใช้ใหม่</label><input class="field" x-model.trim="newAccount.username" required autocomplete="off" placeholder="อย่างน้อย 3 ตัว"></div>
         <div><label class="lbl">รหัสผ่าน</label><input type="password" class="field" x-model="newAccount.password" required minlength="8" autocomplete="new-password" placeholder="อย่างน้อย 8 ตัว"></div>
-        <div><label class="lbl">สิทธิ์</label><select class="field" x-model="newAccount.role"><option value="user">พนักงานขับรถ</option><option value="rental">รถเช่า</option><option value="admin">Admin</option></select></div>
+        <div><label class="lbl">สิทธิ์</label><select class="field" x-model="newAccount.role"><option value="user">พนักงานขับรถ</option><option value="rental">รถเช่า</option><template x-for="g in groupList" :key="g.id"><option :value="g.id" x-text="g.name"></option></template><option value="admin">Admin</option></select></div>
         <button class="btn bg-navy-700 text-white" type="submit" :disabled="userBusy">+ สร้างบัญชี</button>
       </form>
       <p class="text-sm mt-2" :class="userMsgOk ? 'text-green-700' : 'text-red-600'" x-text="userMsg"></p>
@@ -650,10 +651,27 @@ tailwind.config = { theme: { extend: {
       </div>
 
       <div class="bg-white rounded-md border border-slate-200 p-4">
+        <h3 class="font-semibold text-navy-800 mb-1" x-text="'สิทธิ์ / กลุ่มรถเพิ่มเติม (' + groupList.length + ')'"></h3>
+        <p class="text-xs text-slate-600 mb-3">เพิ่มกลุ่มได้ เช่น บริษัทรถเช่าแต่ละเจ้า (รถเช่า Max speed) แต่ละกลุ่มได้เมนูของตัวเอง และเลือกเป็นสิทธิ์ตอนสร้างบัญชีได้ ผู้ใช้ในกลุ่มเห็นและกรอกได้เฉพาะรถที่ตั้งประเภทเป็นกลุ่มนั้น</p>
+        <div class="flex flex-wrap gap-2 mb-3">
+          <input class="field flex-1 min-w-[8rem]" x-model="newGroup" placeholder="ชื่อกลุ่ม เช่น รถเช่า Max speed" @keydown.enter="addGroup()">
+          <button class="btn bg-navy-700 text-white hover:bg-navy-800" @click="addGroup()">เพิ่มกลุ่ม</button>
+        </div>
+        <table class="tbl w-full text-sm border-collapse">
+          <thead class="bg-navy-50 text-navy-800"><tr><th>ชื่อกลุ่ม / เมนู</th><th>จำนวนรถ</th><th></th></tr></thead>
+          <tbody>
+            <template x-for="g in master.groups" :key="g.id">
+              <tr><td><input class="field" x-model="g.name" aria-label="ชื่อกลุ่ม"></td><td class="px-2 text-center" x-text="vehicleCountOf(g.id)"></td><td class="text-center"><button class="text-red-600 text-xs underline" @click="removeGroup(g)">ลบ</button></td></tr>
+            </template>
+          </tbody>
+        </table>
+        <p x-show="!groupList.length" class="text-sm text-slate-500 mt-2">ยังไม่มีกลุ่มเพิ่มเติม (มีสิทธิ์พื้นฐาน: พนักงานขับรถ และ รถเช่า)</p>
+      </div>
+      <div class="bg-white rounded-md border border-slate-200 p-4">
         <h3 class="font-semibold text-navy-800 mb-3" x-text="'ทะเบียนรถ (' + master.vehicles.length + ')'"></h3>
         <div class="flex flex-wrap gap-2 mb-3">
           <input class="field flex-1 min-w-[8rem]" x-model="newVeh.plate" placeholder="ทะเบียน เช่น 96-1251" @keydown.enter="addVehicle()">
-          <input class="field flex-1 min-w-[8rem]" x-model="newVeh.note" placeholder="หมายเหตุ (ไม่บังคับ)" @keydown.enter="addVehicle()"><select class="field w-auto" x-model="newVeh.type"><option value="own">รถบริษัท</option><option value="rental">รถเช่า</option></select>
+          <input class="field flex-1 min-w-[8rem]" x-model="newVeh.note" placeholder="หมายเหตุ (ไม่บังคับ)" @keydown.enter="addVehicle()"><select class="field w-auto" x-model="newVeh.type"><option value="own">รถบริษัท</option><option value="rental">รถเช่า</option><template x-for="g in groupList" :key="g.id"><option :value="g.id" x-text="g.name"></option></template></select>
           <button class="btn bg-navy-700 text-white hover:bg-navy-800" @click="addVehicle()">เพิ่ม</button>
         </div>
         <table class="tbl w-full text-sm border-collapse">
@@ -662,7 +680,7 @@ tailwind.config = { theme: { extend: {
             <template x-for="v in master.vehicles" :key="v.id">
               <tr>
                 <td><div class="flex items-center gap-2"><span class="inline-block w-5 h-5 rounded-full shrink-0" :style="'background:' + vc(v.plate).bg"></span><input class="field" x-model="v.plate" aria-label="ทะเบียนรถ"></div></td>
-                <td><select class="field" x-model="v.type" aria-label="ประเภทรถ"><option value="own">รถบริษัท</option><option value="rental">รถเช่า</option></select></td><td><input class="field" x-model="v.note" aria-label="หมายเหตุ"></td>
+                <td><select class="field" x-model="v.type" aria-label="ประเภทรถ"><option value="own">รถบริษัท</option><option value="rental">รถเช่า</option><template x-for="g in groupList" :key="g.id"><option :value="g.id" x-text="g.name"></option></template></select></td><td><input class="field" x-model="v.note" aria-label="หมายเหตุ"></td>
                 <td class="text-center"><button class="text-red-600 text-xs underline" @click="removeVehicle(v)">ลบ</button></td>
               </tr>
             </template>
@@ -730,6 +748,7 @@ tailwind.config = { theme: { extend: {
         <li>ที่ Admin → ทะเบียนรถ เพิ่มทะเบียนใหม่ หรือเปลี่ยนคอลัมน์ "ประเภท" ของทะเบียนเดิมเป็น "รถเช่า" (ทะเบียนเดิมถูกตั้งเป็น "รถบริษัท" ไว้ก่อน)</li>
         <li>ที่ จัดการบัญชีผู้ใช้งาน สร้างบัญชีและเลือกสิทธิ์ "พนักงานขับรถ" / "รถเช่า" / "Admin"</li>
         <li>ใบงานของรถเช่าจะปรากฏในเมนู "รถเช่า" หลังกด "บันทึกใบงาน"</li>
+        <li>ต้องการแยกบริษัทรถเช่าหลายเจ้า: ที่ Admin → "สิทธิ์ / กลุ่มรถเพิ่มเติม" เพิ่มกลุ่ม เช่น "รถเช่า Max speed" จะได้เมนูใหม่ จากนั้นตั้งประเภทของทะเบียนรถเป็นกลุ่มนั้น และสร้างบัญชีด้วยสิทธิ์ชื่อกลุ่มนั้น</li>
         <li>บัญชี User เดิมจะกลายเป็นสิทธิ์ "พนักงานขับรถ" อัตโนมัติ</li>
       </ol>
     </div>
@@ -747,7 +766,7 @@ tailwind.config = { theme: { extend: {
 </div>
 
 <script>
-// ใส่ค่าตรงนี้ถ้าต้องการให้ทุกเครื่องเชื่อม Google Sheet โดยไม่ต้องกรอกที่หน้าล็อกอิน เช่น { url: 'https://script.google.com/macros/s/AKfycbxHB2VfYnQa8Q-hMtxHShPSOxJQc7nFq1hKdgqoNHu5CBeR1P2Ytg0144Qfavcmcs7H/exec', token: 'vschem2026' }
+// ใส่ค่าตรงนี้ถ้าต้องการให้ทุกเครื่องเชื่อม Google Sheet โดยไม่ต้องกรอกที่หน้าล็อกอิน เช่น { url: 'https://script.google.com/macros/s/.../exec', token: '...' }
 const SHEET_CONFIG = null;
 function dispatchApp() {
   const KEY = 'vschem-dispatch-v1', MKEY = 'vschem-master-v1', HKEY = 'vschem-history-v1';
@@ -781,7 +800,7 @@ function dispatchApp() {
     done:     { label: 'จบงาน รอตรวจสอบ', head: 'bg-orange-600', badge: 'bg-orange-600 text-white' },
     verified: { label: 'ตรวจสอบแล้ว',     head: 'bg-green-700',  badge: 'bg-green-700 text-white' }
   };
-  const seedMaster = () => ({
+  const seedMaster = () => ({ groups: [],
     employees: INITIAL_EMPLOYEES.map(e => Object.assign({ id: uid(), role: 'both', active: true }, e)),
     vehicles: [{ id: uid(), plate: '96-1251', note: '' }],
     checker: '',
@@ -799,7 +818,9 @@ function dispatchApp() {
     pasteText: '', importMsg: '', importOk: true,
     dlg: { open: false, msg: '', fn: null },
     tab: 'dispatch', jobId: null, selVehicle: null, justSaved: null, savedErr: false,
-    tabs: [{ id: 'dispatch', label: 'ใบงาน' }, { id: 'drivers', label: 'รถ / ทะเบียน' }, { id: 'rentals', label: 'รถเช่า' }, { id: 'dashboard', label: 'Dashboard' }, { id: 'admin', label: 'Admin' }],
+    newGroup: '',
+    get tabs() { return [{ id: 'dispatch', label: 'ใบงาน' }, { id: 'drivers', label: 'รถ / ทะเบียน' }, { id: 'rentals', label: 'รถเช่า' }].concat((this.master.groups || []).map(g => ({ id: g.id, label: g.name })), [{ id: 'dashboard', label: 'Dashboard' }, { id: 'admin', label: 'Admin' }]); },
+    tabLabel(id) { const x = this.tabs.find(t => t.id === id); return x ? x.label : ''; },
     master: seedMaster(), history: [], range: '30',
     newEmp: { empId: '', name: '', role: 'driver', tripFeeRate: null, overnightFeeRate: null, startDate: today() },
     empSearch: '', empFilter: 'all', docSeqInput: null,
@@ -828,7 +849,7 @@ function dispatchApp() {
       this.ensureMaster(); this.normalizeCrew(this.doc);
       if (!this.doc.docNo) { this.doc.docNoAuto = true; this.doc.docNo = this.nextDocNo(this.doc.date); }
       this.$watch('doc', () => { this.save(false); this.scheduleSync(); });
-      this.$watch('master', v => { this.put(MKEY, v); this.scheduleSync(); });
+      this.$watch('master', v => { this.put(MKEY, v); this.scheduleSync(); this.fixTab(); });
       this.$watch('history', v => { this.put(HKEY, v); this.scheduleSync(); });
       this.authSession = localStorage.getItem('vschem-auth-session') || '';
       this.restoreAuth();
@@ -1078,12 +1099,36 @@ function dispatchApp() {
       return { bg, fg: lum > 150 ? '#1e293b' : '#ffffff', tint: bg + '26' };
     },
     chip(plate) { const c = this.vc(plate); return 'background:' + c.bg + ';color:' + c.fg; },
-    roleLabel(r) { return r === 'admin' ? 'Admin' : (r === 'rental' ? 'รถเช่า' : 'พนักงานขับรถ'); },
-    fleetOf(plate) { const v = this.master.vehicles.find(x => this.normPlate(x.plate) === this.normPlate(plate) && this.normPlate(plate)); return v && v.type === 'rental' ? 'rental' : 'own'; },
-    get curFleet() { return this.tab === 'drivers' ? 'own' : (this.tab === 'rentals' ? 'rental' : null); },
+    inTab(id) { return this.tab === id && this.allowedTabs.includes(id); },
+    fixTab() { if (this.authUser && !this.allowedTabs.includes(this.tab)) { this.tab = this.allowedTabs[0] || ''; this.selVehicle = null; this.jobId = null; } },
+    get groupList() { return this.master.groups || []; },
+    groupName(id) { return id === 'own' ? 'รถบริษัท' : (id === 'rental' ? 'รถเช่า' : ((this.groupList.find(g => g.id === id) || {}).name || 'รถบริษัท')); },
+    roleLabel(r) { if (r === 'admin') return 'Admin'; if (r === 'user') return 'พนักงานขับรถ'; if (r === 'rental') return 'รถเช่า'; const g = this.groupList.find(x => x.id === r); return g ? g.name : 'พนักงานขับรถ'; },
+    fleetOf(plate) { const v = this.master.vehicles.find(x => this.normPlate(x.plate) === this.normPlate(plate) && this.normPlate(plate)); const ty = v && v.type; return ty && (ty === 'rental' || this.groupList.some(g => g.id === ty)) ? ty : 'own'; },
+    tabFor(f) { return f === 'own' ? 'drivers' : (f === 'rental' ? 'rentals' : f); },
+    get curFleet() { if (this.tab === 'drivers') return 'own'; if (this.tab === 'rentals') return 'rental'; return this.groupList.some(g => g.id === this.tab) ? this.tab : null; },
     get allowedTabs() {
       const r = this.authUser && this.authUser.role;
-      return r === 'admin' ? ['dispatch', 'drivers', 'rentals', 'dashboard', 'admin'] : (r === 'user' ? ['drivers'] : (r === 'rental' ? ['rentals'] : []));
+      if (r === 'admin') return this.tabs.map(x => x.id);
+      if (r === 'user') return ['drivers'];
+      if (r === 'rental') return ['rentals'];
+      return this.groupList.some(g => g.id === r) ? [r] : [];
+    },
+    vehicleCountOf(id) { return this.master.vehicles.filter(v => v.type === id).length; },
+    addGroup() {
+      const n = this.newGroup.trim();
+      if (!n) return this.msg(false, 'กรุณากรอกชื่อกลุ่ม');
+      if (['รถเช่า', 'รถบริษัท'].includes(n) || this.groupList.some(g => g.name.trim().toLowerCase() === n.toLowerCase())) return this.msg(false, 'มีกลุ่มชื่อ "' + n + '" อยู่แล้ว');
+      this.master.groups.push({ id: 'g_' + uid(), name: n });
+      this.newGroup = ''; this.msg(true, 'เพิ่มกลุ่มแล้ว: ' + n + ' เมนูใหม่และสิทธิ์นี้พร้อมใช้งาน');
+    },
+    removeGroup(g) {
+      const nv = this.vehicleCountOf(g.id), na = this.users.filter(u => u.role === g.id).length;
+      this.ask('ลบกลุ่ม "' + g.name + '"? รถ ' + nv + ' คันในกลุ่มนี้จะกลับเป็น "รถบริษัท" และบัญชี ' + na + ' บัญชีในสิทธิ์นี้จะเข้าใช้งานไม่ได้จนกว่าจะเปลี่ยนสิทธิ์', () => {
+        this.master.vehicles.forEach(v => { if (v.type === g.id) v.type = 'own'; });
+        this.master.groups = this.master.groups.filter(x => x.id !== g.id);
+        this.msg(true, 'ลบกลุ่มแล้ว');
+      });
     },
     get vehiclesList() { return this.master.vehicles.filter(v => v.plate.trim()); },
     setActive(e, on) {
@@ -1181,8 +1226,7 @@ function dispatchApp() {
     get allDocs() {
       const others = this.history.filter(h => h.id !== this.doc.id);
       const docs = this.hasData(this.doc) ? others.concat(this.doc) : others, r = this.authUser && this.authUser.role;
-      if (r === 'user') return docs.filter(d => this.fleetOf(d.vehicle) === 'own');
-      if (r === 'rental') return docs.filter(d => this.fleetOf(d.vehicle) === 'rental');
+      if (r && r !== 'admin') { const g = r === 'user' ? 'own' : r; return docs.filter(d => this.fleetOf(d.vehicle) === g); }
       return docs;
     },
     get rangeDocs() {
@@ -1245,7 +1289,7 @@ function dispatchApp() {
       this.archiveCurrent();
       this.justSaved = { id: this.doc.id, docNo: this.doc.docNo, driver: this.doc.driver, vehicle: this.doc.vehicle };
       this.selVehicle = null; this.jobId = null;
-      this.tab = this.fleetOf(this.doc.vehicle) === 'rental' ? 'rentals' : 'drivers';
+      this.tab = this.tabFor(this.fleetOf(this.doc.vehicle));
     },
     openJob(d) { this.jobId = null; if (d.id === this.doc.id) this.tab = 'dispatch'; else this.openDoc(d); },
     startJob(d) {
@@ -1431,6 +1475,7 @@ function dispatchApp() {
       });
     },
     ensureMaster() {
+      if (!this.master.groups) this.master.groups = [];
       (this.master.vehicles || []).forEach(v => { if (!v.type) v.type = 'own'; });
       const m = this.master;
       if (!m.docNo) m.docNo = { yearType: 'CE', pad: 3, sep: '' };
